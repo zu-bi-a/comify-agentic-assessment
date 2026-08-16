@@ -1,0 +1,66 @@
+[
+  {
+    "id": "41d68903-4d3d-4707-b171-6b30d509e676",
+    "channel": "whatsapp",
+    "name": "independence_day_self_gifting",
+    "brand": "Giva",
+    "payload": {
+      "category": "MARKETING",
+      "header": "Independence Day, your way",
+      "body": "Hi {{1}}, celebrate Independence Day with a little something for yourself. Explore Giva\u2019s collection across styles and price points, curated for your everyday sparkle. Find a piece that feels like you and make it yours. \u2728\n\n{{2}}",
+      "footer": "You\u2019re receiving this because you opted in to Giva updates.",
+      "buttons": [
+        "Shop the collection"
+      ]
+    },
+    "status": "saved",
+    "created_at": "2026-08-16T13:55:33.888396+00:00"
+  },
+  {
+    "id": "1af8145c-b98d-4cb4-9f0e-debe6e8dcd7e",
+    "channel": "push",
+    "name": "independence_day_self_gifting_push",
+    "brand": "Giva",
+    "payload": {
+      "title": "Independence Day, your way",
+      "body": "Find a little something for yourself this Independence Day. Explore Giva styles across price points and make it yours. \u2728",
+      "deep_link": "Independence Day collection"
+    },
+    "status": "saved",
+    "created_at": "2026-08-16T14:00:07.945847+00:00"
+  },
+  {
+    "id": "7f24015d-ca09-4e35-b43e-662716b27410",
+    "channel": "whatsapp",
+    "name": "raksha_bandhan_gifting",
+    "brand": "Giva",
+    "payload": {
+      "category": "MARKETING",
+      "header": "A thoughtful Raksha Bandhan gift",
+      "body": "Hi {{1}}, celebrate Raksha Bandhan with a meaningful gift for your sibling. Explore Giva\u2019s jewelry collection across styles and price points, and choose something they\u2019ll love wearing. \ud83c\udf81\n\n{{2}}",
+      "footer": "You\u2019re receiving this because you opted in to Giva updates.",
+      "buttons": [
+        "Shop gifts"
+      ]
+    },
+    "status": "saved",
+    "created_at": "2026-08-16T14:00:54.333292+00:00"
+  },
+  {
+    "id": "a140448a-4228-4ed1-8d2b-099a397d7e23",
+    "channel": "whatsapp",
+    "name": "independence_day_self_gifting",
+    "brand": "Giva",
+    "payload": {
+      "category": "MARKETING",
+      "header": "Independence Day, your way",
+      "body": "Hi {{1}}, celebrate Independence Day with a little something for yourself. As we uphold our constitutional values of freedom, equality and justice, explore Giva\u2019s collection across styles and price points. Find a piece that feels like you and make it yours. \u2728\n\n{{2}}",
+      "footer": "You\u2019re receiving this because you opted in to Giva updates.",
+      "buttons": [
+        "Shop the collection"
+      ]
+    },
+    "status": "saved",
+    "created_at": "2026-08-16T14:02:24.302800+00:00"
+  }
+]

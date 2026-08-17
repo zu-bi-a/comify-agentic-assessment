@@ -22,8 +22,15 @@ from fastapi import FastAPI  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from agents_app import store  # noqa: E402
-from agents_app.agents_def import AGENTS_BY_NAME, triage_agent  # noqa: E402
+from agents_app.agents_def import (  # noqa: E402
+    AGENTS_BY_NAME,
+    push_agent,
+    triage_agent,
+    whatsapp_agent,
+)
 from agents_app.context import GivaContext  # noqa: E402
+
+AGENT_HINTS = {"whatsapp": whatsapp_agent, "push": push_agent}
 
 DATA_DIR = Path(os.environ.get("GIVA_DATA_DIR", str(ROOT_DIR / "data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,6 +45,7 @@ _SESSION_STATE: dict[str, dict] = {}
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    agent_hint: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -74,7 +82,10 @@ def _pop_quick_replies(context: GivaContext) -> list[str] | None:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     state = _get_session_state(req.session_id)
-    current_agent = AGENTS_BY_NAME.get(state["agent_name"], triage_agent)
+    if req.agent_hint and req.agent_hint in AGENT_HINTS:
+        current_agent = AGENT_HINTS[req.agent_hint]
+    else:
+        current_agent = AGENTS_BY_NAME.get(state["agent_name"], triage_agent)
     session = SQLiteSession(req.session_id, CONVERSATIONS_DB)
     state["context"].pending_quick_replies = None
 

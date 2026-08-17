@@ -1,13 +1,14 @@
-import type { ChatResponse, Template } from "./types";
+import type { AgentHint, ChatResponse, Template } from "./types";
 
 export async function sendChatMessage(
   sessionId: string,
-  message: string
+  message: string,
+  agentHint?: AgentHint
 ): Promise<ChatResponse> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, message }),
+    body: JSON.stringify({ session_id: sessionId, message, agent_hint: agentHint }),
   });
   if (!res.ok) {
     throw new Error(`Chat request failed: ${res.status} ${res.statusText}`);

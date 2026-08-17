@@ -1,5 +1,7 @@
 export type MessageRole = "user" | "agent" | "system";
 
+export type AgentHint = "whatsapp" | "push";
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -21,4 +23,5 @@ export interface Template {
   payload: Record<string, unknown>;
   status: string;
   created_at: string;
+  updated_at?: string;
 }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import json
 import re
 from pathlib import Path
 
@@ -9,6 +11,17 @@ from . import store
 from .context import GivaContext
 
 BRAND_MD_PATH = Path(__file__).resolve().parent.parent / "brand" / "giva_brand.md"
+CATALOGUE_PATH = Path(__file__).resolve().parent.parent / "brand" / "catalogue.json"
+
+CATALOGUE_MATCH_CONFIDENCE_THRESHOLD = 0.6
+
+# Words too generic across this catalogue's descriptions to discriminate between
+# collections (e.g. "pieces" and "jewelry" appear almost everywhere).
+CATALOGUE_STOP_WORDS = {
+    "pieces", "piece", "jewelry", "jewellery", "silver", "collection",
+    "collections", "designs", "design", "wear", "gifting", "gifts", "gift",
+    "catalogue", "catalog",
+}
 
 _SECTION_ALIASES = {
     "identity": "1. Brand identity & mission",
@@ -34,6 +47,45 @@ RED_FLAG_PHRASES = [
 
 def _read_brand_md() -> str:
     return BRAND_MD_PATH.read_text(encoding="utf-8")
+
+
+def _load_catalogue() -> list[dict]:
+    return json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
+
+
+def _catalogue_match_score(query: str, collection: dict) -> float:
+    """Score how well a collection matches free-text query wording.
+
+    Combines literal name similarity (catches "spring catalogue" ~= "Spring
+    Bloom Collection") with description keyword overlap (catches
+    semantically-related-but-lexically-different wording, e.g. "wedding
+    pieces" ~= Bridal Shine's description, "diwali gifts" ~= Festive
+    Gold-Tone's description, since those keywords live in the description
+    rather than the name).
+    """
+    query_lower = query.lower().strip()
+    name_lower = collection["name"].lower()
+    description_lower = collection["description"].lower()
+    query_words = [
+        w
+        for w in re.findall(r"[a-z]+", query_lower)
+        if len(w) > 3 and w not in CATALOGUE_STOP_WORDS
+    ]
+
+    name_ratio = difflib.SequenceMatcher(None, query_lower, name_lower).ratio()
+
+    name_bonus = 0.0
+    if query_lower in name_lower:
+        name_bonus = 0.3
+    elif query_words and any(w in name_lower for w in query_words):
+        name_bonus = 0.2
+
+    desc_bonus = 0.0
+    if query_words:
+        desc_hits = sum(1 for w in query_words if w in description_lower)
+        desc_bonus = 0.45 * (desc_hits / len(query_words))
+
+    return min(name_ratio + max(name_bonus, desc_bonus), 1.0)
 
 
 def _extract_section(full_text: str, heading_snippet: str) -> str:
@@ -97,6 +149,46 @@ def get_push_notification_specs() -> str:
         "- Body: <=150 characters (Android/iOS collapse longer bodies).\n"
         "- Optional deep link / action button should name a real in-app destination.\n"
         "- Respect quiet hours in the framing; avoid copy implying urgent late-night action."
+    )
+
+
+@function_tool
+def list_catalogue_collections() -> str:
+    """List all real Giva product collections available to reference in a template."""
+    collections = _load_catalogue()
+    lines = [f"- {c['name']}: {c['description']}" for c in collections]
+    return "\n".join(lines)
+
+
+@function_tool
+def find_catalogue_collection(query: str) -> str:
+    """Find the Giva product collection(s) that best match a user's own wording
+    (e.g. "spring catalogue", "rakhi stuff", "wedding pieces"). Always call this
+    when the user references a collection/catalogue by name, even if their wording
+    isn't exact -- then confirm the match with the user (e.g. via
+    offer_quick_replies with the candidate name(s)) before using it in a draft.
+    Never invent a collection name that isn't in the catalogue.
+
+    Args:
+        query: The user's own wording for the collection they mean.
+    """
+    collections = _load_catalogue()
+    scored = sorted(
+        ((_catalogue_match_score(query, c), c) for c in collections),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    best_score, best = scored[0]
+    if best_score >= CATALOGUE_MATCH_CONFIDENCE_THRESHOLD:
+        return (
+            f"Best match ({best_score:.2f} confidence): {best['name']} -- "
+            f"{best['description']}. Confirm this with the user before using it."
+        )
+    top = scored[:3]
+    lines = [f"- {c['name']}: {c['description']} (confidence {s:.2f})" for s, c in top]
+    return (
+        "No confident single match. Ask the user to pick from the closest "
+        "candidates:\n" + "\n".join(lines)
     )
 
 
@@ -216,6 +308,94 @@ def save_push_template(
     payload = {"title": title, "body": body, "deep_link": deep_link}
     record = store.add_template("push", name, ctx.context.brand_name, payload)
     return f"Saved push template '{name}' with id {record['id']}."
+
+
+@function_tool
+def load_template_for_editing(ctx: RunContextWrapper[GivaContext], template_id: str) -> str:
+    """Load a previously saved template so it can be edited. Call this as your
+    first action when the user wants to edit a specific saved template, before
+    anything else. Remembers the id so that once the user approves a revised
+    draft, you update this same template instead of saving a new one.
+
+    Args:
+        template_id: The id of the saved template to edit.
+    """
+    record = store.get_template(template_id)
+    if record is None:
+        return f"No saved template found with id {template_id}. It may have been removed."
+    ctx.context.editing_template_id = template_id
+    payload = record["payload"]
+    fields = "\n".join(f"- {k}: {v}" for k, v in payload.items())
+    return (
+        f"Loaded '{record['name']}' ({record['channel']}) for editing:\n{fields}\n\n"
+        "Present this briefly to the user and ask how they'd like to modify it."
+    )
+
+
+@function_tool
+def update_whatsapp_template(
+    ctx: RunContextWrapper[GivaContext],
+    template_id: str,
+    name: str,
+    category: str,
+    body: str,
+    header: str | None = None,
+    footer: str | None = None,
+    buttons: list[str] | None = None,
+) -> str:
+    """Save a revised WhatsApp template over an existing saved entry (in place,
+    not as a new template). Only call this after the user has approved the
+    revised draft during an edit flow started with load_template_for_editing.
+
+    Args:
+        template_id: The id of the template being edited (from load_template_for_editing).
+        name: Internal name for this template.
+        category: "MARKETING", "UTILITY", or "AUTHENTICATION".
+        body: Main message body, with {{1}}, {{2}}, ... variables as needed.
+        header: Optional header text.
+        footer: Optional footer text.
+        buttons: Optional list of button labels (max 3).
+    """
+    payload = {
+        "category": category,
+        "header": header,
+        "body": body,
+        "footer": footer,
+        "buttons": buttons or [],
+    }
+    record = store.update_template(template_id, name, payload)
+    if record is None:
+        return f"No saved template found with id {template_id} -- could not update."
+    ctx.context.editing_template_id = None
+    return f"Updated WhatsApp template '{name}' (id {template_id})."
+
+
+@function_tool
+def update_push_template(
+    ctx: RunContextWrapper[GivaContext],
+    template_id: str,
+    name: str,
+    title: str,
+    body: str,
+    deep_link: str | None = None,
+) -> str:
+    """Save a revised push notification template over an existing saved entry (in
+    place, not as a new template). Only call this after the user has approved the
+    revised draft during an edit flow started with load_template_for_editing.
+
+    Args:
+        template_id: The id of the template being edited (from load_template_for_editing).
+        name: Internal name for this template.
+        title: Notification title.
+        body: Notification body.
+        deep_link: Optional in-app destination for the notification's action.
+    """
+    payload = {"title": title, "body": body, "deep_link": deep_link}
+    record = store.update_template(template_id, name, payload)
+    if record is None:
+        return f"No saved template found with id {template_id} -- could not update."
+    ctx.context.editing_template_id = None
+    return f"Updated push template '{name}' (id {template_id})."
 
 
 @function_tool

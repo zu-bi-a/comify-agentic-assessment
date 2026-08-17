@@ -1,0 +1,27 @@
+[
+  {
+    "id": "spring-bloom",
+    "name": "Spring Bloom Collection",
+    "description": "Floral-inspired 925 silver pieces launched for spring -- light, everyday wearable designs for self-gifting or gifting a friend."
+  },
+  {
+    "id": "rakhi-edit",
+    "name": "Rakhi Edit",
+    "description": "Gifting-focused pieces curated for Raksha Bandhan -- bracelets and pendants siblings gift each other."
+  },
+  {
+    "id": "bridal-shine",
+    "name": "Bridal Shine Collection",
+    "description": "Statement necklaces, earrings, and bangles for weddings, engagements, and bridal functions."
+  },
+  {
+    "id": "everyday-minimals",
+    "name": "Everyday Minimals",
+    "description": "Understated, lightweight daily-wear silver jewelry -- simple studs, thin chains, stackable rings."
+  },
+  {
+    "id": "festive-gold-tone",
+    "name": "Festive Gold-Tone Edit",
+    "description": "Gold-toned 925 silver pieces designed for festive occasions like Diwali and Karva Chauth."
+  }
+]

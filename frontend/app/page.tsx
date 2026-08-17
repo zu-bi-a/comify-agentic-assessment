@@ -8,7 +8,7 @@ import { QuickReplies } from "@/components/QuickReplies";
 import { TemplatesSidebar } from "@/components/TemplatesSidebar";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { fetchTemplates, sendChatMessage } from "@/lib/api";
-import type { ChatMessage, Template } from "@/lib/types";
+import type { AgentHint, ChatMessage, Template } from "@/lib/types";
 
 const SESSION_STORAGE_KEY = "giva_session_id";
 
@@ -54,12 +54,17 @@ export default function Home() {
     }
   }
 
-  async function handleSend(text: string) {
+  async function sendToAgent(
+    text: string,
+    options?: { agentHint?: AgentHint; showUserMessage?: boolean }
+  ) {
     if (!sessionId) return;
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text }]);
+    if (options?.showUserMessage ?? true) {
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text }]);
+    }
     setSending(true);
     try {
-      const res = await sendChatMessage(sessionId, text);
+      const res = await sendChatMessage(sessionId, text, options?.agentHint);
       setMessages((prev) => [
         ...prev,
         {
@@ -83,6 +88,17 @@ export default function Home() {
     } finally {
       setSending(false);
     }
+  }
+
+  function handleSend(text: string) {
+    return sendToAgent(text);
+  }
+
+  function handleEditTemplate(template: Template) {
+    return sendToAgent(`[EDIT_TEMPLATE] id=${template.id}`, {
+      agentHint: template.channel as AgentHint,
+      showUserMessage: false,
+    });
   }
 
   const lastMessage = messages[messages.length - 1];
@@ -112,7 +128,7 @@ export default function Home() {
         </div>
         <Composer disabled={!sessionId || sending} onSend={handleSend} />
       </main>
-      <TemplatesSidebar templates={templates} />
+      <TemplatesSidebar templates={templates} onEdit={handleEditTemplate} />
     </div>
   );
 }

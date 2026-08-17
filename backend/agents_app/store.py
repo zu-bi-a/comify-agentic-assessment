@@ -44,3 +44,24 @@ def list_templates(channel: str | None = None) -> list[dict]:
     if channel:
         templates = [t for t in templates if t["channel"] == channel]
     return templates
+
+
+def get_template(template_id: str) -> dict | None:
+    _ensure_store()
+    with _lock:
+        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
+    return next((t for t in templates if t["id"] == template_id), None)
+
+
+def update_template(template_id: str, name: str, payload: dict) -> dict | None:
+    _ensure_store()
+    with _lock:
+        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
+        for t in templates:
+            if t["id"] == template_id:
+                t["name"] = name
+                t["payload"] = payload
+                t["updated_at"] = datetime.now(timezone.utc).isoformat()
+                TEMPLATES_PATH.write_text(json.dumps(templates, indent=2), encoding="utf-8")
+                return t
+    return None

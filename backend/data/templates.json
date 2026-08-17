@@ -92,5 +92,20 @@
     },
     "status": "saved",
     "created_at": "2026-08-17T05:13:45.362117+00:00"
+  },
+  {
+    "id": "5028d7a4-aad7-40ed-a53f-13fe597b091b",
+    "channel": "whatsapp",
+    "name": "payment_confirmation",
+    "brand": "Giva",
+    "payload": {
+      "category": "UTILITY",
+      "header": "Payment received",
+      "body": "Hi {{1}}, your payment of {{2}} for order {{3}} has been received successfully. We\u2019ll keep you updated on your order status.",
+      "footer": "Giva",
+      "buttons": []
+    },
+    "status": "saved",
+    "created_at": "2026-08-17T06:23:19.507035+00:00"
   }
 ]

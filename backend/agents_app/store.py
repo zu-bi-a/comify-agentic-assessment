@@ -45,6 +45,19 @@ async def list_templates(channel: str | None = None) -> list[dict]:
         return [dict(row._mapping) for row in result.all()]
 
 
+async def list_templates_by_brand(brand_name: str, channel: str | None = None) -> list[dict]:
+    async with async_session() as session:
+        stmt = (
+            select(templates)
+            .where(templates.c.brand == brand_name)
+            .order_by(templates.c.created_at.desc())
+        )
+        if channel:
+            stmt = stmt.where(templates.c.channel == channel)
+        result = await session.execute(stmt)
+        return [dict(row._mapping) for row in result.all()]
+
+
 async def get_template(template_id: str) -> dict | None:
     async with async_session() as session:
         result = await session.execute(select(templates).where(templates.c.id == template_id))

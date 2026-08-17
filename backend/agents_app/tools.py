@@ -93,6 +93,28 @@ def _text_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
 
 
+def _keyword_match_score(query: str, text: str) -> float:
+    """Fraction of the query's meaningful words found in text -- suited to
+    topic search ("diwali offer") against a template's name/tags/body, unlike
+    _text_similarity which compares two whole drafts to each other."""
+    query_words = [w for w in re.findall(r"[a-z]+", query.lower()) if len(w) > 2]
+    if not query_words:
+        return 0.0
+    text_lower = text.lower()
+    return sum(1 for w in query_words if w in text_lower) / len(query_words)
+
+
+def _template_search_text(record: dict) -> str:
+    payload = record.get("payload") or {}
+    parts = [
+        record.get("name", ""),
+        " ".join(record.get("tags") or []),
+        str(payload.get("body", "")),
+        str(payload.get("title", "")),
+    ]
+    return " ".join(p for p in parts if p)
+
+
 def _auto_tags(
     ctx: RunContextWrapper[GivaContext],
     explicit_tags: list[str] | None,
@@ -540,3 +562,36 @@ async def list_saved_templates(channel: str | None = None) -> str:
         for t in templates
     ]
     return "\n".join(lines)
+
+
+@function_tool
+async def search_saved_templates(
+    ctx: RunContextWrapper[GivaContext], query: str, channel: str | None = None
+) -> str:
+    """Check whether a saved template already exists for a topic/occasion the
+    user describes in their own words (e.g. "diwali offer", "welcome
+    message"). Use this -- not list_saved_templates -- whenever the user asks
+    something like "do I have a template for X?".
+
+    Args:
+        query: The user's own wording for what they're looking for.
+        channel: Optional "whatsapp" or "push" to narrow the search.
+    """
+    records = await store.list_templates_by_brand(
+        ctx.context.brand_name, channel.strip().lower() if channel else None
+    )
+    if not records:
+        return "No saved templates yet."
+    scored = sorted(
+        ((_keyword_match_score(query, _template_search_text(r)), r) for r in records),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    matches = [(s, r) for s, r in scored if s > 0][:5]
+    if not matches:
+        return f"No saved templates found matching '{query}'."
+    lines = [
+        f"- [{r['channel']}] {r['name']} (id={r['id']}, created={r['created_at']})"
+        for _, r in matches
+    ]
+    return "Possible matches:\n" + "\n".join(lines)

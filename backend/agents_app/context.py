@@ -15,3 +15,7 @@ class GivaContext:
     # Set by load_template_for_editing when the user is revising a saved
     # template; tells the agent to update this id instead of saving a new one.
     editing_template_id: str | None = None
+    # Auto-captured by find_catalogue_collection on a confident match, so
+    # save/find_similar_templates can auto-tag with it without relying on the
+    # agent remembering to pass it explicitly.
+    confirmed_collection: str | None = None

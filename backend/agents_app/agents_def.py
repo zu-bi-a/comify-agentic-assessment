@@ -6,6 +6,7 @@ from .context import GivaContext
 from .guardrails import brand_compliance_guardrail, intent_safety_guardrail
 from .tools import (
     find_catalogue_collection,
+    find_similar_templates,
     get_brand_guidelines,
     get_push_notification_specs,
     get_whatsapp_template_specs,
@@ -66,6 +67,29 @@ Referencing a product collection:
   user to pick from list_catalogue_collections.
 """
 
+DUPLICATE_CHECK_RULE = """
+Checking for an already-existing similar template:
+- Right after you draft the template body -- same step as calling
+  validate_template_structure, before showing the draft to the user -- also
+  call find_similar_templates with the channel and your draft body. Add
+  `tags` only if you're confident about specific occasion/topic keywords from
+  the conversation (e.g. ["rakhi"]) -- this is optional and only narrows the
+  search; the confirmed catalogue collection and category are already
+  factored in automatically, you never need to ask the user for tags.
+- If it reports a similar saved template, do NOT present your draft as
+  normal. Call offer_quick_replies with options like ["Create a variation",
+  "View existing", "Continue anyway", "Cancel"] and ask the user how they'd
+  like to proceed, mentioning the existing template's name.
+- Only continue once the user has chosen: "Create a variation" (revise your
+  draft to be distinctly different -- new angle, different offer framing --
+  before presenting it), "Continue anyway" (present your original draft as
+  normal), or they pick to view/reuse the existing one. If they cancel, stop
+  drafting for this request.
+- When you save (new or revised), category and the confirmed catalogue
+  collection are tagged automatically -- only pass `tags` yourself if there's
+  extra occasion/topic detail worth remembering beyond that.
+"""
+
 WHATSAPP_INSTRUCTIONS = """
 You are the Giva WhatsApp Template Agent. You write WhatsApp Business message
 templates for the Giva jewelry brand.
@@ -88,8 +112,9 @@ provides, and which fields should be personalization variables.
 Draft the template as HEADER (optional) / BODY / FOOTER (optional) /
 BUTTONS (optional), using {{1}}, {{2}}, ... for variables. Before presenting
 a draft to the user, call validate_template_structure(channel="whatsapp",
-...) and fix any issues it reports. Show the user the draft clearly and ask
-for approval or changes. Once approved, save it:
+...) and fix any issues it reports, and check find_similar_templates (see
+below) -- follow its instructions if a similar template is found. Show the
+user the draft clearly and ask for approval or changes. Once approved, save it:
 - If editing_template_id was set this conversation (you called
   load_template_for_editing), you MUST call update_whatsapp_template with
   that same template_id. Calling save_whatsapp_template here would be wrong
@@ -100,10 +125,11 @@ for approval or changes. Once approved, save it:
 Quick-reply trigger points for this agent:
 - Asking which category to use -> options ["Marketing", "Utility", "Authentication"]
 - Asking the user to approve or revise a shown draft -> options ["Approve & save", "Make changes"]
+- A similar saved template was found -> options ["Create a variation", "View existing", "Continue anyway", "Cancel"]
 """ + QUICK_REPLY_RULE + """
 Don't use offer_quick_replies for open-ended questions like what the message
 should say or who the audience is -- let the user type those.
-""" + EDIT_RULE + CATALOGUE_RULE + """
+""" + EDIT_RULE + CATALOGUE_RULE + DUPLICATE_CHECK_RULE + """
 If the user asks for a push notification instead of, or in addition to,
 WhatsApp, hand off to the Push Notification Agent. If the request is
 unrelated to WhatsApp templates, hand off back to the Triage Agent.
@@ -125,8 +151,10 @@ link/action button if relevant.
 
 Draft the notification as TITLE / BODY (+ optional deep link). Before
 presenting a draft to the user, call validate_template_structure(
-channel="push", ...) and fix any issues it reports. Show the user the draft
-clearly and ask for approval or changes. Once approved, save it:
+channel="push", ...) and fix any issues it reports, and check
+find_similar_templates (see below) -- follow its instructions if a similar
+template is found. Show the user the draft clearly and ask for approval or
+changes. Once approved, save it:
 - If editing_template_id was set this conversation (you called
   load_template_for_editing), you MUST call update_push_template with that
   same template_id. Calling save_push_template here would be wrong -- it
@@ -136,10 +164,11 @@ clearly and ask for approval or changes. Once approved, save it:
 
 Quick-reply trigger points for this agent:
 - Asking the user to approve or revise a shown draft -> options ["Approve & save", "Make changes"]
+- A similar saved template was found -> options ["Create a variation", "View existing", "Continue anyway", "Cancel"]
 """ + QUICK_REPLY_RULE + """
 Don't use offer_quick_replies for open-ended questions like what the message
 should say or who the audience is -- let the user type those.
-""" + EDIT_RULE + CATALOGUE_RULE + """
+""" + EDIT_RULE + CATALOGUE_RULE + DUPLICATE_CHECK_RULE + """
 If the user asks for a WhatsApp template instead of, or in addition to,
 push, hand off to the WhatsApp Template Agent. If the request is unrelated
 to push templates, hand off back to the Triage Agent.
@@ -181,6 +210,7 @@ whatsapp_agent = Agent[GivaContext](
         get_brand_guidelines,
         get_whatsapp_template_specs,
         validate_template_structure,
+        find_similar_templates,
         save_whatsapp_template,
         update_whatsapp_template,
         load_template_for_editing,
@@ -200,6 +230,7 @@ push_agent = Agent[GivaContext](
         get_brand_guidelines,
         get_push_notification_specs,
         validate_template_structure,
+        find_similar_templates,
         save_push_template,
         update_push_template,
         load_template_for_editing,

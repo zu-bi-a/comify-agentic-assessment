@@ -259,7 +259,7 @@ def validate_template_structure(
 
 
 @function_tool
-def save_whatsapp_template(
+async def save_whatsapp_template(
     ctx: RunContextWrapper[GivaContext],
     name: str,
     category: str,
@@ -285,12 +285,12 @@ def save_whatsapp_template(
         "footer": footer,
         "buttons": buttons or [],
     }
-    record = store.add_template("whatsapp", name, ctx.context.brand_name, payload)
+    record = await store.add_template("whatsapp", name, ctx.context.brand_name, payload)
     return f"Saved WhatsApp template '{name}' with id {record['id']}."
 
 
 @function_tool
-def save_push_template(
+async def save_push_template(
     ctx: RunContextWrapper[GivaContext],
     name: str,
     title: str,
@@ -306,12 +306,12 @@ def save_push_template(
         deep_link: Optional in-app destination for the notification's action.
     """
     payload = {"title": title, "body": body, "deep_link": deep_link}
-    record = store.add_template("push", name, ctx.context.brand_name, payload)
+    record = await store.add_template("push", name, ctx.context.brand_name, payload)
     return f"Saved push template '{name}' with id {record['id']}."
 
 
 @function_tool
-def load_template_for_editing(ctx: RunContextWrapper[GivaContext], template_id: str) -> str:
+async def load_template_for_editing(ctx: RunContextWrapper[GivaContext], template_id: str) -> str:
     """Load a previously saved template so it can be edited. Call this as your
     first action when the user wants to edit a specific saved template, before
     anything else. Remembers the id so that once the user approves a revised
@@ -320,7 +320,7 @@ def load_template_for_editing(ctx: RunContextWrapper[GivaContext], template_id: 
     Args:
         template_id: The id of the saved template to edit.
     """
-    record = store.get_template(template_id)
+    record = await store.get_template(template_id)
     if record is None:
         return f"No saved template found with id {template_id}. It may have been removed."
     ctx.context.editing_template_id = template_id
@@ -333,7 +333,7 @@ def load_template_for_editing(ctx: RunContextWrapper[GivaContext], template_id: 
 
 
 @function_tool
-def update_whatsapp_template(
+async def update_whatsapp_template(
     ctx: RunContextWrapper[GivaContext],
     template_id: str,
     name: str,
@@ -363,7 +363,7 @@ def update_whatsapp_template(
         "footer": footer,
         "buttons": buttons or [],
     }
-    record = store.update_template(template_id, name, payload)
+    record = await store.update_template(template_id, name, payload)
     if record is None:
         return f"No saved template found with id {template_id} -- could not update."
     ctx.context.editing_template_id = None
@@ -371,7 +371,7 @@ def update_whatsapp_template(
 
 
 @function_tool
-def update_push_template(
+async def update_push_template(
     ctx: RunContextWrapper[GivaContext],
     template_id: str,
     name: str,
@@ -391,7 +391,7 @@ def update_push_template(
         deep_link: Optional in-app destination for the notification's action.
     """
     payload = {"title": title, "body": body, "deep_link": deep_link}
-    record = store.update_template(template_id, name, payload)
+    record = await store.update_template(template_id, name, payload)
     if record is None:
         return f"No saved template found with id {template_id} -- could not update."
     ctx.context.editing_template_id = None
@@ -422,9 +422,9 @@ def offer_quick_replies(ctx: RunContextWrapper[GivaContext], options: list[str])
 
 
 @function_tool
-def list_saved_templates(channel: str | None = None) -> str:
+async def list_saved_templates(channel: str | None = None) -> str:
     """List previously saved templates, optionally filtered by channel ("whatsapp" or "push")."""
-    templates = store.list_templates(channel)
+    templates = await store.list_templates(channel)
     if not templates:
         return "No templates saved yet."
     lines = [

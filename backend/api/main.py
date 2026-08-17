@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -16,12 +16,11 @@ from agents import (  # noqa: E402
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
     Runner,
-    SQLiteSession,
 )
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, HTTPException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from agents_app import store  # noqa: E402
+from agents_app import db, store, threads  # noqa: E402
 from agents_app.agents_def import (  # noqa: E402
     AGENTS_BY_NAME,
     push_agent,
@@ -32,35 +31,44 @@ from agents_app.context import GivaContext  # noqa: E402
 
 AGENT_HINTS = {"whatsapp": whatsapp_agent, "push": push_agent}
 
-DATA_DIR = Path(os.environ.get("GIVA_DATA_DIR", str(ROOT_DIR / "data")))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-CONVERSATIONS_DB = str(DATA_DIR / "conversations.db")
 
-app = FastAPI(title="Giva Template Studio")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.init_models()
+    yield
 
-# session_id -> {"agent_name": str, "context": GivaContext}
+
+app = FastAPI(title="Giva Template Studio", lifespan=lifespan)
+
+# thread_id -> {"agent_name": str, "context": GivaContext} -- in-process cache of
+# per-thread agent state; the durable record lives in the `threads` table.
 _SESSION_STATE: dict[str, dict] = {}
 
 
 class ChatRequest(BaseModel):
-    session_id: str
+    thread_id: str | None = None
     message: str
     agent_hint: str | None = None
 
 
 class ChatResponse(BaseModel):
+    thread_id: str
     reply: str
     agent: str
     quick_replies: list[str] | None = None
 
 
-def _get_session_state(session_id: str) -> dict:
-    if session_id not in _SESSION_STATE:
-        _SESSION_STATE[session_id] = {
-            "agent_name": triage_agent.name,
-            "context": GivaContext(session_id=session_id),
+class RenameThreadRequest(BaseModel):
+    title: str
+
+
+async def _get_session_state(thread_id: str, agent_name: str) -> dict:
+    if thread_id not in _SESSION_STATE:
+        _SESSION_STATE[thread_id] = {
+            "agent_name": agent_name,
+            "context": GivaContext(session_id=thread_id),
         }
-    return _SESSION_STATE[session_id]
+    return _SESSION_STATE[thread_id]
 
 
 GENERIC_COMPLIANCE_REVISION_PROMPT = (
@@ -81,13 +89,30 @@ def _pop_quick_replies(context: GivaContext) -> list[str] | None:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
-    state = _get_session_state(req.session_id)
+    is_new_thread = req.thread_id is None
+    if is_new_thread:
+        thread_row = await threads.create_thread()
+    else:
+        thread_row = await threads.get_thread(req.thread_id)
+        if thread_row is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+    thread_id = thread_row["id"]
+    title_on_first_message = threads.derive_title(req.message) if is_new_thread else None
+
+    state = await _get_session_state(thread_id, thread_row["agent_name"])
     if req.agent_hint and req.agent_hint in AGENT_HINTS:
         current_agent = AGENT_HINTS[req.agent_hint]
     else:
         current_agent = AGENTS_BY_NAME.get(state["agent_name"], triage_agent)
-    session = SQLiteSession(req.session_id, CONVERSATIONS_DB)
+    session = db.agent_session(thread_id)
     state["context"].pending_quick_replies = None
+
+    async def _finish(reply: str, agent_name: str, quick_replies: list[str] | None) -> ChatResponse:
+        await threads.add_message(thread_id, "user", req.message)
+        await threads.add_message(thread_id, "agent", reply, quick_replies)
+        await threads.touch_thread(thread_id, agent_name=agent_name, title=title_on_first_message)
+        state["agent_name"] = agent_name
+        return ChatResponse(thread_id=thread_id, reply=reply, agent=agent_name, quick_replies=quick_replies)
 
     try:
         result = await Runner.run(
@@ -95,14 +120,15 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
     except InputGuardrailTripwireTriggered:
         _pop_quick_replies(state["context"])
-        return ChatResponse(
-            reply=(
+        return await _finish(
+            (
                 "I can't help with that request — it looks like it's asking for "
                 "content outside what I'm allowed to generate (e.g. impersonation, "
                 "phishing-style language, or something unrelated to Giva WhatsApp/"
                 "push templates). Try rephrasing what you'd like the template to say."
             ),
-            agent=current_agent.name,
+            current_agent.name,
+            None,
         )
     except OutputGuardrailTripwireTriggered:
         try:
@@ -112,35 +138,63 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 context=state["context"],
                 session=session,
             )
-            state["agent_name"] = retry_result.last_agent.name
-            return ChatResponse(
-                reply=retry_result.final_output,
-                agent=retry_result.last_agent.name,
-                quick_replies=_pop_quick_replies(state["context"]),
+            return await _finish(
+                retry_result.final_output,
+                retry_result.last_agent.name,
+                _pop_quick_replies(state["context"]),
             )
         except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered):
             _pop_quick_replies(state["context"])
-            return ChatResponse(
-                reply=(
+            return await _finish(
+                (
                     "That draft didn't pass brand compliance and I wasn't able to "
                     "auto-revise it. Could you rephrase the request without any "
                     "claims about gold/diamond materials, guaranteed offers, or "
                     "urgency language?"
                 ),
-                agent=current_agent.name,
+                current_agent.name,
+                None,
             )
 
-    state["agent_name"] = result.last_agent.name
-    return ChatResponse(
-        reply=result.final_output,
-        agent=result.last_agent.name,
-        quick_replies=_pop_quick_replies(state["context"]),
+    return await _finish(
+        result.final_output, result.last_agent.name, _pop_quick_replies(state["context"])
     )
+
+
+@app.get("/threads")
+async def list_threads() -> list[dict]:
+    return await threads.list_threads()
+
+
+@app.get("/threads/{thread_id}/messages")
+async def get_thread_messages(thread_id: str) -> list[dict]:
+    thread_row = await threads.get_thread(thread_id)
+    if thread_row is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return await threads.list_messages(thread_id)
+
+
+@app.patch("/threads/{thread_id}")
+async def rename_thread(thread_id: str, req: RenameThreadRequest) -> dict:
+    record = await threads.rename_thread(thread_id, req.title)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return record
+
+
+@app.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str) -> dict:
+    await db.agent_session(thread_id).clear_session()
+    deleted = await threads.delete_thread(thread_id)
+    _SESSION_STATE.pop(thread_id, None)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return {"status": "deleted"}
 
 
 @app.get("/templates")
 async def list_templates(channel: str | None = None) -> list[dict]:
-    return store.list_templates(channel)
+    return await store.list_templates(channel)
 
 
 @app.get("/health")

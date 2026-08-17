@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: giva
+      POSTGRES_PASSWORD: giva
+      POSTGRES_DB: giva
+    ports:
+      # Host port 5433 (not 5432) so this doesn't collide with a Postgres you
+      # may already have running locally.
+      - "5433:5432"
+    volumes:
+      - giva_pg_data:/var/lib/postgresql/data
+
+volumes:
+  giva_pg_data:

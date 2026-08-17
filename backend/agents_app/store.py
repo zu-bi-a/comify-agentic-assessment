@@ -1,67 +1,56 @@
-import json
-import os
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from threading import Lock
 
-DATA_DIR = Path(
-    os.environ.get("GIVA_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
-)
-TEMPLATES_PATH = DATA_DIR / "templates.json"
+from sqlalchemy import insert, select, update
 
-_lock = Lock()
+from .db import async_session, templates
 
 
-def _ensure_store() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not TEMPLATES_PATH.exists():
-        TEMPLATES_PATH.write_text("[]", encoding="utf-8")
+async def add_template(channel: str, name: str, brand_name: str, payload: dict) -> dict:
+    record_id = str(uuid.uuid4())
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                insert(templates)
+                .values(
+                    id=record_id,
+                    channel=channel,
+                    name=name,
+                    brand=brand_name,
+                    payload=payload,
+                    status="saved",
+                )
+                .returning(templates)
+            )
+            return dict(result.one()._mapping)
 
 
-def add_template(channel: str, name: str, brand_name: str, payload: dict) -> dict:
-    _ensure_store()
-    with _lock:
-        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
-        record = {
-            "id": str(uuid.uuid4()),
-            "channel": channel,
-            "name": name,
-            "brand": brand_name,
-            "payload": payload,
-            "status": "saved",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        templates.append(record)
-        TEMPLATES_PATH.write_text(json.dumps(templates, indent=2), encoding="utf-8")
-        return record
+async def list_templates(channel: str | None = None) -> list[dict]:
+    async with async_session() as session:
+        stmt = select(templates).order_by(templates.c.created_at.asc())
+        if channel:
+            stmt = stmt.where(templates.c.channel == channel)
+        result = await session.execute(stmt)
+        return [dict(row._mapping) for row in result.all()]
 
 
-def list_templates(channel: str | None = None) -> list[dict]:
-    _ensure_store()
-    with _lock:
-        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
-    if channel:
-        templates = [t for t in templates if t["channel"] == channel]
-    return templates
+async def get_template(template_id: str) -> dict | None:
+    async with async_session() as session:
+        result = await session.execute(select(templates).where(templates.c.id == template_id))
+        row = result.one_or_none()
+        return dict(row._mapping) if row else None
 
 
-def get_template(template_id: str) -> dict | None:
-    _ensure_store()
-    with _lock:
-        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
-    return next((t for t in templates if t["id"] == template_id), None)
-
-
-def update_template(template_id: str, name: str, payload: dict) -> dict | None:
-    _ensure_store()
-    with _lock:
-        templates = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
-        for t in templates:
-            if t["id"] == template_id:
-                t["name"] = name
-                t["payload"] = payload
-                t["updated_at"] = datetime.now(timezone.utc).isoformat()
-                TEMPLATES_PATH.write_text(json.dumps(templates, indent=2), encoding="utf-8")
-                return t
-    return None
+async def update_template(template_id: str, name: str, payload: dict) -> dict | None:
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(templates)
+                .where(templates.c.id == template_id)
+                .values(name=name, payload=payload, updated_at=datetime.now(timezone.utc))
+                .returning(templates)
+            )
+            row = result.one_or_none()
+            return dict(row._mapping) if row else None

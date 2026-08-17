@@ -9,6 +9,7 @@ from agents import RunContextWrapper, function_tool
 
 from . import store
 from .context import GivaContext
+from .observability import observability_span
 
 BRAND_MD_PATH = Path(__file__).resolve().parent.parent / "brand" / "giva_brand.md"
 CATALOGUE_PATH = Path(__file__).resolve().parent.parent / "brand" / "catalogue.json"
@@ -269,7 +270,10 @@ async def find_similar_templates(
         ctx.context.brand_name, channel.strip().lower(), category, tags
     )
     if not candidates:
-        return "No similar saved templates found."
+        with observability_span(
+            "duplicate_check", data={"candidate_count": 0, "matched": False}
+        ):
+            return "No similar saved templates found."
 
     scored = sorted(
         (
@@ -280,17 +284,28 @@ async def find_similar_templates(
         reverse=True,
     )
     best_score, best = scored[0]
-    if best_score < TEMPLATE_SIMILARITY_THRESHOLD:
-        return "No closely similar saved template found."
-    return (
-        f"A similar template already exists ({best_score:.2f} similarity): "
-        f"'{best['name']}' (id={best['id']}, saved {best['created_at']}). Do "
-        "NOT just present your draft as normal -- call offer_quick_replies "
-        "with options like [\"Create a variation\", \"View existing\", "
-        "\"Continue anyway\", \"Cancel\"] and ask the user how they'd like to "
-        "proceed, mentioning the existing template's name, before showing or "
-        "saving your draft."
-    )
+    matched = best_score >= TEMPLATE_SIMILARITY_THRESHOLD
+    with observability_span(
+        "duplicate_check",
+        data={
+            "candidate_count": len(candidates),
+            "best_score": round(best_score, 3),
+            "threshold": TEMPLATE_SIMILARITY_THRESHOLD,
+            "matched": matched,
+            "matched_template_id": best["id"] if matched else None,
+        },
+    ):
+        if not matched:
+            return "No closely similar saved template found."
+        return (
+            f"A similar template already exists ({best_score:.2f} similarity): "
+            f"'{best['name']}' (id={best['id']}, saved {best['created_at']}). Do "
+            "NOT just present your draft as normal -- call offer_quick_replies "
+            "with options like [\"Create a variation\", \"View existing\", "
+            "\"Continue anyway\", \"Cancel\"] and ask the user how they'd like to "
+            "proceed, mentioning the existing template's name, before showing or "
+            "saving your draft."
+        )
 
 
 @function_tool
@@ -446,7 +461,11 @@ async def load_template_for_editing(ctx: RunContextWrapper[GivaContext], templat
     fields = "\n".join(f"- {k}: {v}" for k, v in payload.items())
     return (
         f"Loaded '{record['name']}' ({record['channel']}) for editing:\n{fields}\n\n"
-        "Present this briefly to the user and ask how they'd like to modify it."
+        "If the user already described the change they want -- anywhere "
+        "earlier in this conversation, including the message that prompted "
+        "this edit -- apply it directly to the content above and present the "
+        "revised draft; do not ask them to repeat it. Only ask how they'd "
+        "like to modify it if they haven't said yet."
     )
 
 

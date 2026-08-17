@@ -89,6 +89,88 @@ Open http://localhost:3000 — set `BACKEND_URL` in `frontend/.env.local` if
 the backend isn't running on the default `http://localhost:8000`
 (see `frontend/.env.local.example`).
 
+## Observability & Evals
+
+The backend can trace every agent run — each LLM call, tool call, handoff,
+and guardrail check, plus a couple of business-decision spans
+(`duplicate_check`, `compliance_retry`) — to a local, self-hosted
+[Langfuse](https://langfuse.com) instance. This is opt-in for local
+debugging: with no Langfuse configured, the app runs exactly as before.
+
+**Start it** (repo root):
+
+```bash
+docker compose up -d langfuse-postgres langfuse-clickhouse langfuse-redis langfuse-minio langfuse-worker langfuse-web
+```
+
+First boot takes a little while (ClickHouse + migrations). Once
+`http://localhost:3001/api/public/health` returns `200`, log in at
+`http://localhost:3001` with the seeded dev account (`LANGFUSE_INIT_USER_EMAIL`
+/ `LANGFUSE_INIT_USER_PASSWORD` in `docker-compose.yml`: `dev@giva.local` /
+`giva-dev-password`). The matching `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`
+are already in `backend/.env.example` — copy them into `backend/.env` and
+restart the backend to start tracing.
+
+**Debugging a conversation**: every chat turn is grouped into a Langfuse
+**Session** keyed by `thread_id`, so opening a thread's session shows every
+turn in order, each with its full span tree (agent → generation → tool
+calls → handoffs → guardrails), plus `agent_hint`/`turn_kind` metadata so a
+brand-compliance retry turn is clearly labeled rather than an unexplained
+second trace.
+
+This is a local self-host stack (its own Postgres + ClickHouse + Redis +
+MinIO, separate from the app's own `db` service) scoped to development. It
+isn't wired up for the Render deployment — standing up a durable instance
+for production traffic is a separate infra decision (e.g. Railway, a small
+VM, or Langfuse Cloud) for whenever that's needed.
+
+**Evals** (`backend/evals/`): `cases.py` has 16 cases driving real multi-turn
+conversations through the actual agents — routing (Triage → right
+specialist), quick-reply timing, edit-vs-save, duplicate detection, category
+handling (always confirmed explicitly, never silently inferred, and the
+chosen category is verified to survive unchanged to the saved record), a
+cross-channel pivot mid-conversation (asserting the new agent's reply
+actually still references what was established before the pivot, not just
+that the handoff happened), full happy-path flows that verify
+`save_whatsapp_template`/`save_push_template` actually get called with
+correct args, and guardrail behavior in both directions — things that
+*should* get blocked (impersonation, off-topic) and things that should
+*not* (a genuinely sourced, dated discount; real confirmed low stock) with
+the guardrail's stated reason checked, not just a boolean. `GUARDRAIL_PROBES`
+adds 3 cases that call `brand_compliance_guardrail` directly with a
+hand-crafted draft, bypassing the drafting agent — the reliable way to test
+its judgment, since asking the agent outright for a false claim just makes
+it self-correct rather than draft something for the guardrail to catch.
+
+```bash
+cd backend
+python -m evals.run_evals
+```
+
+Needs the local app Postgres up and `OPENAI_API_KEY` set; Langfuse is
+optional, only used to also push pass/fail scores onto the traces.
+
+**A real finding from building this, not a hypothetical**: `cases.py` has 3
+cases (`*_may_false_positive`) that are *expected* to fail — they're tracking
+a genuine, reproducible gap, not flaking. `brand_compliance_guardrail`
+([guardrails.py](backend/agents_app/guardrails.py)) reviews only the
+isolated drafted text, never the conversation that produced it, so it has no
+way to tell a discount/scarcity/material claim the user explicitly
+authorized earlier from one the model invented — it flags both the same way.
+In testing this reliably over-blocks legitimate campaigns (a real 20% off
+sale with real dates, confirmed real low stock, a real discount code) purely
+because the guardrail can't see the sourcing. Fixing it means passing it
+(at minimum) the user's original request alongside the draft, not just the
+draft in isolation.
+
+Separately, some multi-turn cases can be non-deterministic in how many
+clarifying questions the model asks before committing to a draft — the
+harness nudges the conversation forward a bounded number of turns
+(`until_tool` in `cases.py`) to absorb that, but it isn't unlimited. Treat
+one isolated failure outside the 3 known-gap cases as "worth a look," not
+automatically a regression; a case that fails consistently across repeated
+runs is the real signal.
+
 ## Deploy
 
 Backend → **Render**, frontend → **Vercel**. The frontend never calls the

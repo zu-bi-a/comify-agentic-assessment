@@ -13,5 +13,160 @@ services:
     volumes:
       - giva_pg_data:/var/lib/postgresql/data
 
+  # --- Langfuse (local observability/evals dashboard) ---------------------
+  # Self-hosted Langfuse needs its own stack (Postgres + ClickHouse + Redis +
+  # S3-compatible storage) -- unrelated to the `db` service above, which is
+  # the app's own data. Dev-only creds/secrets throughout; this stack is not
+  # intended to be exposed beyond localhost. See README "Observability &
+  # Evals" for how to use it.
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:4
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3030:3030"
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: http://localhost:3001
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      SALT: giva-dev-salt
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "true"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: giva-dev-clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: giva-dev-minio-secret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: giva-dev-minio-secret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: giva-dev-redis-secret
+      REDIS_TLS_ENABLED: "false"
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:4
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      # 3001 (not 3000) so this doesn't collide with the frontend's `next dev`.
+      - "3001:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: giva-dev-nextauth-secret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      # Bootstraps a ready-to-use org/project/API-key pair on first run, so
+      # `docker compose up` doesn't require clicking through onboarding --
+      # these are the same values that go into backend/.env.example.
+      LANGFUSE_INIT_ORG_ID: giva-dev-org
+      LANGFUSE_INIT_ORG_NAME: Giva (dev)
+      LANGFUSE_INIT_PROJECT_ID: giva-dev-project
+      LANGFUSE_INIT_PROJECT_NAME: Giva Template Studio
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-giva-dev-0000000000000000
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-giva-dev-0000000000000000
+      LANGFUSE_INIT_USER_EMAIL: dev@giva.local
+      LANGFUSE_INIT_USER_NAME: Giva Dev
+      LANGFUSE_INIT_USER_PASSWORD: giva-dev-password
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: giva-dev-clickhouse
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9001:9000"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9091" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: giva-dev-minio-secret
+    ports:
+      - "9090:9000"
+      - "127.0.0.1:9092:9091"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    restart: unless-stopped
+    command: >
+      --requirepass giva-dev-redis-secret
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-postgres:
+    image: docker.io/postgres:17
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+
 volumes:
   giva_pg_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:

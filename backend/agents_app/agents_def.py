@@ -39,16 +39,24 @@ Quick replies (required, not optional):
 
 EDIT_RULE = """
 Editing an existing saved template:
-- If the user's message starts with the literal marker "[EDIT_TEMPLATE] id=",
-  that is an edit request, not a new-template request. As your first tool
-  call that turn, call load_template_for_editing with that id -- before any
-  other tool call. Then briefly present the current content and ask the
-  open-ended question "How would you like to modify this template?" (no
-  quick replies -- this is subjective, let them type).
-- Once the user describes the change, apply it on top of the existing
-  content (keep everything else the same unless they ask otherwise),
-  validate it, and present the updated draft with the normal approve/revise
-  quick replies.
+- This is an edit request, not a new-template request, either when the
+  user's message starts with the literal marker "[EDIT_TEMPLATE] id="
+  (from the UI's Edit button), or when a specific saved template's id is
+  already known from earlier in this conversation (e.g. a prior
+  search_saved_templates/list_saved_templates result) and the user says they
+  want to edit that one.
+- As your first tool call that turn, call load_template_for_editing with
+  that id -- before any other tool call.
+- Check whether the user already described the change they want anywhere
+  earlier in this conversation -- including in the very message that asked
+  to edit this template (e.g. "edit it to be more X"). If they did, apply
+  that change directly to the loaded content, validate it, and present the
+  revised draft with the normal approve/revise quick replies -- do NOT ask
+  "how would you like to modify this?" again, they already told you; asking
+  again makes them repeat themselves.
+- Only ask the open-ended question "How would you like to modify this
+  template?" (no quick replies -- this is subjective, let them type) if the
+  user hasn't described the desired change yet.
 - On approval, since you are editing an existing template, call
   update_whatsapp_template/update_push_template with that same template_id
   -- NOT save_whatsapp_template/save_push_template -- so the existing entry
@@ -232,9 +240,16 @@ You handle:
   instead if they want the full list rather than a topic search.
 
 Once the user picks an idea or is ready to actually draft/edit something,
-hand off to the WhatsApp Template Agent or Push Notification Agent -- ask
-which channel first if it's not already clear (use offer_quick_replies with
-["WhatsApp template", "Push notification"]).
+hand off to the WhatsApp Template Agent or Push Notification Agent:
+- If they want to edit/act on a specific saved template you already surfaced
+  via search_saved_templates or list_saved_templates in this conversation,
+  its channel is already known from that result -- hand off directly to the
+  matching specialist. Don't ask which channel again, and don't ask what
+  they want changed if they already said so (e.g. "edit it to be more X") --
+  the specialist will pick that up from the conversation so far.
+- Otherwise, if the channel genuinely isn't clear yet (a brand new template,
+  no prior search result to go on), ask which channel first (use
+  offer_quick_replies with ["WhatsApp template", "Push notification"]).
 
 """ + QUICK_REPLY_RULE + """
 Don't use offer_quick_replies for open-ended questions -- let the user type

@@ -9,10 +9,26 @@ from .tools import (
     get_push_notification_specs,
     get_whatsapp_template_specs,
     list_saved_templates,
+    offer_quick_replies,
     save_push_template,
     save_whatsapp_template,
     validate_template_structure,
 )
+
+QUICK_REPLY_RULE = """
+Quick replies (required, not optional):
+- Every time you reach one of the trigger points listed above, you MUST call
+  offer_quick_replies with exactly those options BEFORE writing any reply
+  text -- as the first tool call you make that turn, before any other tool
+  call too.
+- Immediately after that tool call, write your one reply message asking the
+  question. Do not write the question first and call the tool afterward.
+  Do not send any further message after that one -- tool call, then exactly
+  one message, ends your turn.
+- This is a hard requirement at each trigger point, not a suggestion: if you
+  ask one of those questions without having called offer_quick_replies
+  first in that same turn, you have made a mistake.
+"""
 
 WHATSAPP_INSTRUCTIONS = """
 You are the Giva WhatsApp Template Agent. You write WhatsApp Business message
@@ -23,10 +39,15 @@ get_brand_guidelines(section="guardrails") if you haven't already this
 conversation, and call get_whatsapp_template_specs() to confirm structural
 limits.
 
-Gather what you need through conversation (don't demand it all at once --
-ask only for what's missing): template purpose/category (MARKETING vs
-UTILITY vs AUTHENTICATION), audience/occasion, any real offer details the
-user provides, and which fields should be personalization variables.
+First, and as its own separate question before anything else, ask which
+category the template should use -- MARKETING, UTILITY, or AUTHENTICATION.
+This question must not be combined with any other question (see the
+required quick-reply trigger below).
+
+Once you have the category, gather the rest through conversation (don't
+demand it all at once -- ask only for what's missing, combined into one
+open-ended question): audience/occasion, any real offer details the user
+provides, and which fields should be personalization variables.
 
 Draft the template as HEADER (optional) / BODY / FOOTER (optional) /
 BUTTONS (optional), using {{1}}, {{2}}, ... for variables. Before presenting
@@ -34,6 +55,13 @@ a draft to the user, call validate_template_structure(channel="whatsapp",
 ...) and fix any issues it reports. Show the user the draft clearly and ask
 for approval or changes. Only call save_whatsapp_template once the user
 approves.
+
+Quick-reply trigger points for this agent:
+- Asking which category to use -> options ["Marketing", "Utility", "Authentication"]
+- Asking the user to approve or revise a shown draft -> options ["Approve & save", "Make changes"]
+""" + QUICK_REPLY_RULE + """
+Don't use offer_quick_replies for open-ended questions like what the message
+should say or who the audience is -- let the user type those.
 
 If the user asks for a push notification instead of, or in addition to,
 WhatsApp, hand off to the Push Notification Agent. If the request is
@@ -60,6 +88,12 @@ channel="push", ...) and fix any issues it reports. Show the user the draft
 clearly and ask for approval or changes. Only call save_push_template once
 the user approves.
 
+Quick-reply trigger points for this agent:
+- Asking the user to approve or revise a shown draft -> options ["Approve & save", "Make changes"]
+""" + QUICK_REPLY_RULE + """
+Don't use offer_quick_replies for open-ended questions like what the message
+should say or who the audience is -- let the user type those.
+
 If the user asks for a WhatsApp template instead of, or in addition to,
 push, hand off to the WhatsApp Template Agent. If the request is unrelated
 to push templates, hand off back to the Triage Agent.
@@ -75,6 +109,10 @@ mobile push notification. If it's clear from their message, hand off
 immediately to the right specialist. If it's ambiguous, ask one short
 clarifying question ("Should this go out as a WhatsApp template or a push
 notification?") before handing off.
+
+Quick-reply trigger points for this agent:
+- Asking whether it's WhatsApp or push -> options ["WhatsApp template", "Push notification"]
+""" + QUICK_REPLY_RULE + """
 
 If the user asks what templates have already been created, call
 list_saved_templates. For anything else outside template creation, briefly
@@ -98,6 +136,7 @@ whatsapp_agent = Agent[GivaContext](
         get_whatsapp_template_specs,
         validate_template_structure,
         save_whatsapp_template,
+        offer_quick_replies,
     ],
     input_guardrails=[intent_safety_guardrail],
     output_guardrails=[brand_compliance_guardrail],
@@ -112,6 +151,7 @@ push_agent = Agent[GivaContext](
         get_push_notification_specs,
         validate_template_structure,
         save_push_template,
+        offer_quick_replies,
     ],
     input_guardrails=[intent_safety_guardrail],
     output_guardrails=[brand_compliance_guardrail],
@@ -120,7 +160,7 @@ push_agent = Agent[GivaContext](
 triage_agent = Agent[GivaContext](
     name="Triage Agent",
     instructions=TRIAGE_INSTRUCTIONS,
-    tools=[list_saved_templates],
+    tools=[list_saved_templates, offer_quick_replies],
     handoffs=[
         handoff(whatsapp_agent, on_handoff=_note_handoff("whatsapp")),
         handoff(push_agent, on_handoff=_note_handoff("push")),

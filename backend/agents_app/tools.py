@@ -219,6 +219,29 @@ def save_push_template(
 
 
 @function_tool
+def offer_quick_replies(ctx: RunContextWrapper[GivaContext], options: list[str]) -> str:
+    """Attach clickable quick-reply buttons to your current message, for when you're
+    asking the user to choose between a small set of good, discrete answers (e.g.
+    "WhatsApp or push?", a template category, common occasion presets, or
+    approve-vs-revise on a draft).
+
+    Call this BEFORE writing your reply text, then write the one message asking
+    the question as the very next thing you do. Do not write your question first
+    and call this afterward, and do not send another message after calling this --
+    the tool call, then one message, is the whole turn.
+
+    Don't call this for open-ended or subjective questions where the user needs to
+    describe something in their own words (e.g. the exact message copy, custom offer
+    details, who the audience is) -- just ask normally and let them type.
+
+    Args:
+        options: 2-5 short button labels, e.g. ["WhatsApp template", "Push notification"].
+    """
+    ctx.context.pending_quick_replies = list(options)[:5]
+    return "Quick replies attached to this turn."
+
+
+@function_tool
 def list_saved_templates(channel: str | None = None) -> str:
     """List previously saved templates, optionally filtered by channel ("whatsapp" or "push")."""
     templates = store.list_templates(channel)

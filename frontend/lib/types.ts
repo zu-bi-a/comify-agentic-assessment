@@ -4,11 +4,13 @@ export interface ChatMessage {
   id: string;
   role: MessageRole;
   text: string;
+  quickReplies?: string[];
 }
 
 export interface ChatResponse {
   reply: string;
   agent: string;
+  quick_replies?: string[] | null;
 }
 
 export interface Template {

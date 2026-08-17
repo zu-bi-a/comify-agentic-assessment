@@ -43,6 +43,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     agent: str
+    quick_replies: list[str] | None = None
 
 
 def _get_session_state(session_id: str) -> dict:
@@ -64,17 +65,25 @@ GENERIC_COMPLIANCE_REVISION_PROMPT = (
 )
 
 
+def _pop_quick_replies(context: GivaContext) -> list[str] | None:
+    quick_replies = context.pending_quick_replies
+    context.pending_quick_replies = None
+    return quick_replies
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     state = _get_session_state(req.session_id)
     current_agent = AGENTS_BY_NAME.get(state["agent_name"], triage_agent)
     session = SQLiteSession(req.session_id, CONVERSATIONS_DB)
+    state["context"].pending_quick_replies = None
 
     try:
         result = await Runner.run(
             current_agent, req.message, context=state["context"], session=session
         )
     except InputGuardrailTripwireTriggered:
+        _pop_quick_replies(state["context"])
         return ChatResponse(
             reply=(
                 "I can't help with that request — it looks like it's asking for "
@@ -94,9 +103,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
             )
             state["agent_name"] = retry_result.last_agent.name
             return ChatResponse(
-                reply=retry_result.final_output, agent=retry_result.last_agent.name
+                reply=retry_result.final_output,
+                agent=retry_result.last_agent.name,
+                quick_replies=_pop_quick_replies(state["context"]),
             )
         except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered):
+            _pop_quick_replies(state["context"])
             return ChatResponse(
                 reply=(
                     "That draft didn't pass brand compliance and I wasn't able to "
@@ -108,7 +120,11 @@ async def chat(req: ChatRequest) -> ChatResponse:
             )
 
     state["agent_name"] = result.last_agent.name
-    return ChatResponse(reply=result.final_output, agent=result.last_agent.name)
+    return ChatResponse(
+        reply=result.final_output,
+        agent=result.last_agent.name,
+        quick_replies=_pop_quick_replies(state["context"]),
+    )
 
 
 @app.get("/templates")

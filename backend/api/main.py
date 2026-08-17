@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,15 +19,13 @@ from agents import (  # noqa: E402
     SQLiteSession,
 )
 from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
-from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from agents_app import store  # noqa: E402
 from agents_app.agents_def import AGENTS_BY_NAME, triage_agent  # noqa: E402
 from agents_app.context import GivaContext  # noqa: E402
 
-DATA_DIR = ROOT_DIR / "data"
+DATA_DIR = Path(os.environ.get("GIVA_DATA_DIR", str(ROOT_DIR / "data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONVERSATIONS_DB = str(DATA_DIR / "conversations.db")
 
@@ -117,9 +116,6 @@ async def list_templates(channel: str | None = None) -> list[dict]:
     return store.list_templates(channel)
 
 
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
-
-
-@app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}

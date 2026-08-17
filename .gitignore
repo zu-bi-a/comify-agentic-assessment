@@ -1,5 +1,6 @@
-.venv/
+# backend (Python) — frontend/ has its own .gitignore from create-next-app
+backend/.venv/
 __pycache__/
 *.pyc
-.env
-data/conversations.db
+backend/.env
+backend/data/conversations.db*

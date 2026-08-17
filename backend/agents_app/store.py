@@ -1,10 +1,13 @@
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(
+    os.environ.get("GIVA_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))
+)
 TEMPLATES_PATH = DATA_DIR / "templates.json"
 
 _lock = Lock()

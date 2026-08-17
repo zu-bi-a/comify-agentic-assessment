@@ -14,6 +14,7 @@ BRAND_MD_PATH = Path(__file__).resolve().parent.parent / "brand" / "giva_brand.m
 CATALOGUE_PATH = Path(__file__).resolve().parent.parent / "brand" / "catalogue.json"
 
 CATALOGUE_MATCH_CONFIDENCE_THRESHOLD = 0.6
+TEMPLATE_SIMILARITY_THRESHOLD = 0.55
 
 # Words too generic across this catalogue's descriptions to discriminate between
 # collections (e.g. "pieces" and "jewelry" appear almost everywhere).
@@ -86,6 +87,28 @@ def _catalogue_match_score(query: str, collection: dict) -> float:
         desc_bonus = 0.45 * (desc_hits / len(query_words))
 
     return min(name_ratio + max(name_bonus, desc_bonus), 1.0)
+
+
+def _text_similarity(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def _auto_tags(
+    ctx: RunContextWrapper[GivaContext],
+    explicit_tags: list[str] | None,
+    category: str | None = None,
+) -> list[str] | None:
+    """Merge agent-supplied tags with signals the app already tracks
+    automatically (confirmed catalogue collection, category), so tagging
+    doesn't rely entirely on the agent remembering to pass tags -- the user
+    never has to enter any of this themselves."""
+    auto: list[str] = []
+    if ctx.context.confirmed_collection:
+        auto.append(ctx.context.confirmed_collection)
+    if category:
+        auto.append(category)
+    combined = {t.strip().lower() for t in (explicit_tags or []) + auto if t and t.strip()}
+    return sorted(combined) or None
 
 
 def _extract_section(full_text: str, heading_snippet: str) -> str:
@@ -161,7 +184,7 @@ def list_catalogue_collections() -> str:
 
 
 @function_tool
-def find_catalogue_collection(query: str) -> str:
+def find_catalogue_collection(ctx: RunContextWrapper[GivaContext], query: str) -> str:
     """Find the Giva product collection(s) that best match a user's own wording
     (e.g. "spring catalogue", "rakhi stuff", "wedding pieces"). Always call this
     when the user references a collection/catalogue by name, even if their wording
@@ -180,6 +203,9 @@ def find_catalogue_collection(query: str) -> str:
     )
     best_score, best = scored[0]
     if best_score >= CATALOGUE_MATCH_CONFIDENCE_THRESHOLD:
+        # Auto-captured for tagging (find_similar_templates / save_*) so
+        # tagging doesn't depend on the agent remembering to repeat it.
+        ctx.context.confirmed_collection = best["name"]
         return (
             f"Best match ({best_score:.2f} confidence): {best['name']} -- "
             f"{best['description']}. Confirm this with the user before using it."
@@ -189,6 +215,59 @@ def find_catalogue_collection(query: str) -> str:
     return (
         "No confident single match. Ask the user to pick from the closest "
         "candidates:\n" + "\n".join(lines)
+    )
+
+
+@function_tool
+async def find_similar_templates(
+    ctx: RunContextWrapper[GivaContext],
+    channel: str,
+    draft_body: str,
+    category: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """Check whether a saved template already closely matches the one you're
+    about to create. Call this once you've written an initial draft body --
+    same step as validate_template_structure -- and BEFORE showing the draft
+    to the user.
+
+    Args:
+        channel: "whatsapp" or "push".
+        draft_body: The main body text of your current draft.
+        category: WhatsApp category if known (MARKETING/UTILITY/AUTHENTICATION).
+            Omit for push.
+        tags: Short freeform keywords for this template's occasion/collection/
+            topic that you're confident about from the conversation so far
+            (e.g. ["rakhi", "marketing"]). Omit if unsure -- this only narrows
+            the search, it doesn't have to be exact. (Only used to narrow this
+            search, not stored -- doesn't need to match what you'll pass at
+            save time.)
+    """
+    candidates = await store.find_candidate_templates(
+        ctx.context.brand_name, channel.strip().lower(), category, tags
+    )
+    if not candidates:
+        return "No similar saved templates found."
+
+    scored = sorted(
+        (
+            (_text_similarity(draft_body, c["payload"].get("body", "")), c)
+            for c in candidates
+        ),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    best_score, best = scored[0]
+    if best_score < TEMPLATE_SIMILARITY_THRESHOLD:
+        return "No closely similar saved template found."
+    return (
+        f"A similar template already exists ({best_score:.2f} similarity): "
+        f"'{best['name']}' (id={best['id']}, saved {best['created_at']}). Do "
+        "NOT just present your draft as normal -- call offer_quick_replies "
+        "with options like [\"Create a variation\", \"View existing\", "
+        "\"Continue anyway\", \"Cancel\"] and ask the user how they'd like to "
+        "proceed, mentioning the existing template's name, before showing or "
+        "saving your draft."
     )
 
 
@@ -267,6 +346,7 @@ async def save_whatsapp_template(
     header: str | None = None,
     footer: str | None = None,
     buttons: list[str] | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Persist a finalized, user-approved WhatsApp template to the template store.
 
@@ -277,6 +357,9 @@ async def save_whatsapp_template(
         header: Optional header text.
         footer: Optional footer text.
         buttons: Optional list of button labels (max 3).
+        tags: Optional extra occasion/topic keywords, e.g. ["rakhi"]. The
+            category and any confirmed catalogue collection are tagged
+            automatically -- this is only for anything extra you know.
     """
     payload = {
         "category": category,
@@ -285,7 +368,14 @@ async def save_whatsapp_template(
         "footer": footer,
         "buttons": buttons or [],
     }
-    record = await store.add_template("whatsapp", name, ctx.context.brand_name, payload)
+    record = await store.add_template(
+        "whatsapp",
+        name,
+        ctx.context.brand_name,
+        payload,
+        category=category,
+        tags=_auto_tags(ctx, tags, category),
+    )
     return f"Saved WhatsApp template '{name}' with id {record['id']}."
 
 
@@ -296,6 +386,7 @@ async def save_push_template(
     title: str,
     body: str,
     deep_link: str | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Persist a finalized, user-approved push notification template to the template store.
 
@@ -304,9 +395,14 @@ async def save_push_template(
         title: Notification title.
         body: Notification body.
         deep_link: Optional in-app destination for the notification's action.
+        tags: Optional extra occasion/topic keywords, e.g. ["rakhi"]. Any
+            confirmed catalogue collection is tagged automatically -- this is
+            only for anything extra you know.
     """
     payload = {"title": title, "body": body, "deep_link": deep_link}
-    record = await store.add_template("push", name, ctx.context.brand_name, payload)
+    record = await store.add_template(
+        "push", name, ctx.context.brand_name, payload, tags=_auto_tags(ctx, tags)
+    )
     return f"Saved push template '{name}' with id {record['id']}."
 
 
@@ -342,6 +438,7 @@ async def update_whatsapp_template(
     header: str | None = None,
     footer: str | None = None,
     buttons: list[str] | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Save a revised WhatsApp template over an existing saved entry (in place,
     not as a new template). Only call this after the user has approved the
@@ -355,6 +452,9 @@ async def update_whatsapp_template(
         header: Optional header text.
         footer: Optional footer text.
         buttons: Optional list of button labels (max 3).
+        tags: Optional extra occasion/topic keywords, e.g. ["rakhi"]. The
+            category and any confirmed catalogue collection are tagged
+            automatically -- this is only for anything extra you know.
     """
     payload = {
         "category": category,
@@ -363,7 +463,9 @@ async def update_whatsapp_template(
         "footer": footer,
         "buttons": buttons or [],
     }
-    record = await store.update_template(template_id, name, payload)
+    record = await store.update_template(
+        template_id, name, payload, category=category, tags=_auto_tags(ctx, tags, category)
+    )
     if record is None:
         return f"No saved template found with id {template_id} -- could not update."
     ctx.context.editing_template_id = None
@@ -378,6 +480,7 @@ async def update_push_template(
     title: str,
     body: str,
     deep_link: str | None = None,
+    tags: list[str] | None = None,
 ) -> str:
     """Save a revised push notification template over an existing saved entry (in
     place, not as a new template). Only call this after the user has approved the
@@ -389,9 +492,14 @@ async def update_push_template(
         title: Notification title.
         body: Notification body.
         deep_link: Optional in-app destination for the notification's action.
+        tags: Optional extra occasion/topic keywords, e.g. ["rakhi"]. Any
+            confirmed catalogue collection is tagged automatically -- this is
+            only for anything extra you know.
     """
     payload = {"title": title, "body": body, "deep_link": deep_link}
-    record = await store.update_template(template_id, name, payload)
+    record = await store.update_template(
+        template_id, name, payload, tags=_auto_tags(ctx, tags)
+    )
     if record is None:
         return f"No saved template found with id {template_id} -- could not update."
     ctx.context.editing_template_id = None

@@ -15,7 +15,9 @@ from sqlalchemy import (
     Table,
     Text,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://giva:giva@localhost:5433/giva"
@@ -74,8 +76,15 @@ templates = Table(
     Column("brand", String, nullable=False),
     Column("payload", JSON, nullable=False),
     Column("status", String, nullable=False, server_default="saved"),
+    # Cheap, indexed narrowing fields for similar-template lookups so that
+    # check doesn't need to scan/score every saved template -- see
+    # store.find_candidate_templates.
+    Column("category", String, nullable=True),
+    Column("tags", ARRAY(String), nullable=True),
     Column("created_at", TIMESTAMP(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=True),
+    Index("idx_templates_brand_channel_category", "brand", "channel", "category"),
+    Index("idx_templates_tags_gin", "tags", postgresql_using="gin"),
 )
 
 
@@ -88,6 +97,23 @@ def agent_session(thread_id: str) -> SQLAlchemySession:
 async def init_models() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # create_all only creates missing tables, not columns on an existing
+        # one -- there's no migration tool in this project, so patch an
+        # already-existing `templates` table forward here, idempotently.
+        await conn.execute(text("ALTER TABLE templates ADD COLUMN IF NOT EXISTS category VARCHAR"))
+        await conn.execute(text("ALTER TABLE templates ADD COLUMN IF NOT EXISTS tags VARCHAR[]"))
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_templates_brand_channel_category "
+                "ON templates (brand, channel, category)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_templates_tags_gin "
+                "ON templates USING gin (tags)"
+            )
+        )
     # Bootstraps the Agents SDK's agent_sessions/agent_messages tables once,
     # via its public API rather than the create_tables=True per-request path.
     bootstrap = SQLAlchemySession(session_id="__bootstrap__", engine=engine, create_tables=True)

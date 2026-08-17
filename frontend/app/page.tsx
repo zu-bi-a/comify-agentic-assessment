@@ -5,40 +5,59 @@ import { ChatHeader } from "@/components/ChatHeader";
 import { Composer } from "@/components/Composer";
 import { MessageBubble } from "@/components/MessageBubble";
 import { QuickReplies } from "@/components/QuickReplies";
-import { TemplatesSidebar } from "@/components/TemplatesSidebar";
+import { Sidebar, SidebarTab } from "@/components/Sidebar";
 import { TypingIndicator } from "@/components/TypingIndicator";
-import { fetchTemplates, sendChatMessage } from "@/lib/api";
-import type { AgentHint, ChatMessage, Template } from "@/lib/types";
+import {
+  deleteThread,
+  fetchTemplates,
+  fetchThreadMessages,
+  fetchThreads,
+  renameThread,
+  sendChatMessage,
+} from "@/lib/api";
+import type { AgentHint, ChatMessage, Template, Thread } from "@/lib/types";
 
-const SESSION_STORAGE_KEY = "giva_session_id";
+const THREAD_STORAGE_KEY = "giva_active_thread_id";
 
-function getOrCreateSessionId(): string {
-  const existing = localStorage.getItem(SESSION_STORAGE_KEY);
-  if (existing) return existing;
-  const id = crypto.randomUUID();
-  localStorage.setItem(SESSION_STORAGE_KEY, id);
-  return id;
+const GREETING_TEXT =
+  "Hi! I can help you create a WhatsApp Business template or a push notification for Giva. What would you like to build?";
+const GREETING_QUICK_REPLIES = ["WhatsApp template", "Push notification"];
+
+function greeting(): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: "agent",
+    text: GREETING_TEXT,
+    quickReplies: GREETING_QUICK_REPLIES,
+  };
 }
 
 export default function Home() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("chats");
   const [agentName, setAgentName] = useState("Triage Agent");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setSessionId(getOrCreateSessionId());
-    setMessages([
-      {
-        id: crypto.randomUUID(),
-        role: "agent",
-        text: "Hi! I can help you create a WhatsApp Business template or a push notification for Giva. What would you like to build?",
-        quickReplies: ["WhatsApp template", "Push notification"],
-      },
-    ]);
+    (async () => {
+      const list = await fetchThreads().catch(() => []);
+      setThreads(list);
+      const savedId = localStorage.getItem(THREAD_STORAGE_KEY);
+      const match = savedId ? list.find((t) => t.id === savedId) : undefined;
+      if (match) {
+        await openThread(match);
+      } else {
+        resetToNewChat();
+      }
+      setLoading(false);
+    })();
     refreshTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -47,24 +66,60 @@ export default function Home() {
 
   async function refreshTemplates() {
     try {
-      const data = await fetchTemplates();
-      setTemplates(data);
+      setTemplates(await fetchTemplates());
     } catch {
       // non-fatal
     }
   }
 
+  async function refreshThreads() {
+    try {
+      setThreads(await fetchThreads());
+    } catch {
+      // non-fatal
+    }
+  }
+
+  function resetToNewChat() {
+    setActiveThreadId(null);
+    setAgentName("Triage Agent");
+    setMessages([greeting()]);
+    localStorage.removeItem(THREAD_STORAGE_KEY);
+  }
+
+  async function openThread(thread: Thread) {
+    setLoading(true);
+    try {
+      const history = await fetchThreadMessages(thread.id);
+      setMessages(
+        history.map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          quickReplies: m.quick_replies ?? undefined,
+        }))
+      );
+      setActiveThreadId(thread.id);
+      setAgentName(thread.agent_name);
+      localStorage.setItem(THREAD_STORAGE_KEY, thread.id);
+    } catch {
+      resetToNewChat();
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendToAgent(
     text: string,
-    options?: { agentHint?: AgentHint; showUserMessage?: boolean }
+    options?: { agentHint?: AgentHint; showUserMessage?: boolean; threadId?: string | null }
   ) {
-    if (!sessionId) return;
+    const requestThreadId = options?.threadId !== undefined ? options.threadId : activeThreadId;
     if (options?.showUserMessage ?? true) {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text }]);
     }
     setSending(true);
     try {
-      const res = await sendChatMessage(sessionId, text, options?.agentHint);
+      const res = await sendChatMessage(requestThreadId, text, options?.agentHint);
       setMessages((prev) => [
         ...prev,
         {
@@ -75,7 +130,9 @@ export default function Home() {
         },
       ]);
       setAgentName(res.agent);
-      await refreshTemplates();
+      setActiveThreadId(res.thread_id);
+      localStorage.setItem(THREAD_STORAGE_KEY, res.thread_id);
+      await Promise.all([refreshTemplates(), refreshThreads()]);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -95,15 +152,53 @@ export default function Home() {
   }
 
   function handleEditTemplate(template: Template) {
+    setActiveThreadId(null);
+    setAgentName("Triage Agent");
+    setMessages([]);
+    localStorage.removeItem(THREAD_STORAGE_KEY);
+    setSidebarTab("chats");
     return sendToAgent(`[EDIT_TEMPLATE] id=${template.id}`, {
       agentHint: template.channel as AgentHint,
       showUserMessage: false,
+      threadId: null,
     });
+  }
+
+  function handleNewChat() {
+    if (sending) return;
+    resetToNewChat();
+  }
+
+  function handleSelectThread(threadId: string) {
+    if (sending || threadId === activeThreadId) return;
+    const thread = threads.find((t) => t.id === threadId);
+    if (thread) openThread(thread);
+  }
+
+  async function handleRenameThread(threadId: string, title: string) {
+    try {
+      await renameThread(threadId, title);
+      await refreshThreads();
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async function handleDeleteThread(threadId: string) {
+    if (sending) return;
+    if (!window.confirm("Delete this chat? This can't be undone.")) return;
+    try {
+      await deleteThread(threadId);
+      await refreshThreads();
+      if (threadId === activeThreadId) resetToNewChat();
+    } catch {
+      // non-fatal
+    }
   }
 
   const lastMessage = messages[messages.length - 1];
   const showQuickReplies =
-    !sending && lastMessage?.role === "agent" && (lastMessage.quickReplies?.length ?? 0) > 0;
+    !sending && !loading && lastMessage?.role === "agent" && (lastMessage.quickReplies?.length ?? 0) > 0;
 
   return (
     <div className="layout">
@@ -126,9 +221,20 @@ export default function Home() {
           {sending && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </div>
-        <Composer disabled={!sessionId || sending} onSend={handleSend} />
+        <Composer disabled={sending || loading} onSend={handleSend} />
       </main>
-      <TemplatesSidebar templates={templates} onEdit={handleEditTemplate} />
+      <Sidebar
+        tab={sidebarTab}
+        onTabChange={setSidebarTab}
+        threads={threads}
+        activeThreadId={activeThreadId}
+        onNewChat={handleNewChat}
+        onSelectThread={handleSelectThread}
+        onRenameThread={handleRenameThread}
+        onDeleteThread={handleDeleteThread}
+        templates={templates}
+        onEditTemplate={handleEditTemplate}
+      />
     </div>
   );
 }

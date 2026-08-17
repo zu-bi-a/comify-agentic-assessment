@@ -1,3 +1,9 @@
+databases:
+  - name: giva-db
+    plan: free
+    databaseName: giva
+    user: giva
+
 services:
   - name: giva-backend
     type: web
@@ -10,3 +16,7 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: giva-db
+          property: connectionString

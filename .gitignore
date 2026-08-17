@@ -3,4 +3,3 @@ backend/.venv/
 __pycache__/
 *.pyc
 backend/.env
-backend/data/conversations.db*

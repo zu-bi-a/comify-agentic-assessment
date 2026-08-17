@@ -13,7 +13,7 @@ const FILTER_LABELS: Record<ChannelFilter, string> = {
   push: "Push",
 };
 
-export function TemplatesSidebar({
+export function TemplatesPanel({
   templates,
   onEdit,
 }: {
@@ -30,11 +30,7 @@ export function TemplatesSidebar({
   const exportDisabled = filtered.length === 0;
 
   return (
-    <aside className="templates-pane">
-      <div className="templates-pane-header">
-        <h2>Saved templates</h2>
-        {templates.length > 0 && <span className="templates-count">{filtered.length}</span>}
-      </div>
+    <>
       <div className="channel-filter" role="tablist" aria-label="Filter by channel">
         {(Object.keys(FILTER_LABELS) as ChannelFilter[]).map((key) => (
           <button
@@ -73,6 +69,6 @@ export function TemplatesSidebar({
       ) : (
         [...filtered].reverse().map((t) => <TemplateCard key={t.id} template={t} onEdit={onEdit} />)
       )}
-    </aside>
+    </>
   );
 }

@@ -1,14 +1,18 @@
 export type MessageRole = "user" | "agent" | "system";
 
+export type AgentHint = "whatsapp" | "push";
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
   text: string;
+  quickReplies?: string[];
 }
 
 export interface ChatResponse {
   reply: string;
   agent: string;
+  quick_replies?: string[] | null;
 }
 
 export interface Template {
@@ -19,4 +23,5 @@ export interface Template {
   payload: Record<string, unknown>;
   status: string;
   created_at: string;
+  updated_at?: string;
 }

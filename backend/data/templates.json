@@ -62,5 +62,50 @@
     },
     "status": "saved",
     "created_at": "2026-08-16T14:02:24.302800+00:00"
+  },
+  {
+    "id": "963c3fea-bf1b-462f-8b0b-60c9ed779cd3",
+    "channel": "whatsapp",
+    "name": "spring_catalogue_promotion",
+    "brand": "Giva",
+    "payload": {
+      "category": "MARKETING",
+      "header": "Giva Spring Catalogue",
+      "body": "Hi {{1}}, our spring catalogue is here \ud83c\udf38\n\nExplore {{2}}, curated for the season. See the collection: {{3}}",
+      "footer": "You\u2019re receiving this because you opted in to Giva updates.",
+      "buttons": [
+        "View catalogue"
+      ]
+    },
+    "status": "saved",
+    "created_at": "2026-08-17T03:12:40.698446+00:00"
+  },
+  {
+    "id": "65f03a83-4e33-4a95-a3ad-cbc78310702f",
+    "channel": "push",
+    "name": "spring_catalogue_push",
+    "brand": "Giva",
+    "payload": {
+      "title": "Meet Giva\u2019s Spring Collection",
+      "body": "Discover fresh designs and easy-to-style pieces in Giva\u2019s Spring Catalogue. Find a little something to brighten your season.",
+      "deep_link": null
+    },
+    "status": "saved",
+    "created_at": "2026-08-17T05:13:45.362117+00:00"
+  },
+  {
+    "id": "5028d7a4-aad7-40ed-a53f-13fe597b091b",
+    "channel": "whatsapp",
+    "name": "payment_confirmation",
+    "brand": "Giva",
+    "payload": {
+      "category": "UTILITY",
+      "header": "Payment received",
+      "body": "Hi {{1}}, your payment of {{2}} for order {{3}} has been received successfully. We\u2019ll keep you updated on your order status.",
+      "footer": "Giva",
+      "buttons": []
+    },
+    "status": "saved",
+    "created_at": "2026-08-17T06:23:19.507035+00:00"
   }
 ]

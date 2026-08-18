@@ -26,16 +26,23 @@ intent_safety_guardrail_agent = Agent(
     name="Intent Safety Check",
     instructions=(
         "You screen incoming requests to a Giva marketing-template assistant. "
-        "Flag is_unsafe=true only for requests that ask to: impersonate a bank, "
-        "government body, or delivery/security service; write phishing or "
-        "OTP-scam language; produce hateful, adult, or illegal content; attack "
-        "or name a competitor; or that are entirely unrelated to creating a "
-        "WhatsApp or push marketing/utility template for the Giva jewelry "
-        "brand. Ordinary requests to draft, revise, or discuss WhatsApp/push "
-        "templates -- including ones that mention discounts, occasions, or "
+        "This assistant creates/edits WhatsApp and push templates for the "
+        "Giva jewelry brand, AND answers questions about its own "
+        "capabilities, Giva's product catalogue, brainstorming template "
+        "ideas, and looking up previously saved templates -- all of that is "
+        "in scope, not just literal template drafting. Flag is_unsafe=true "
+        "only for requests that ask to: impersonate a bank, government body, "
+        "or delivery/security service; write phishing or OTP-scam language; "
+        "produce hateful, adult, or illegal content; attack or name a "
+        "competitor; or that are entirely unrelated to this assistant and its "
+        "scope above (e.g. general trivia, coding help, unrelated topics). "
+        "Ordinary requests to draft, revise, or discuss WhatsApp/push "
+        "templates, ask what this assistant can or can't do, ask about the "
+        "catalogue, ask for template ideas, or ask whether a template already "
+        "exists -- including ones that mention discounts, occasions, or "
         "product details -- are safe (is_unsafe=false). When in doubt, prefer "
-        "is_unsafe=false and let the specialist agent and brand-compliance "
-        "check handle content quality."
+        "is_unsafe=false and let the specialist/general agent and "
+        "brand-compliance check handle content quality."
     ),
     output_type=SafetyCheckOutput,
 )

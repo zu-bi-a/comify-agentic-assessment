@@ -15,7 +15,6 @@ load_dotenv(ROOT_DIR / ".env")
 from agents import (  # noqa: E402
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
-    Runner,
 )
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
@@ -28,12 +27,18 @@ from agents_app.agents_def import (  # noqa: E402
     whatsapp_agent,
 )
 from agents_app.context import GivaContext  # noqa: E402
+from agents_app.observability import (  # noqa: E402
+    observability_span,
+    setup_observability,
+    traced_run,
+)
 
 AGENT_HINTS = {"whatsapp": whatsapp_agent, "push": push_agent}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_observability()
     await db.init_models()
     yield
 
@@ -115,8 +120,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
         return ChatResponse(thread_id=thread_id, reply=reply, agent=agent_name, quick_replies=quick_replies)
 
     try:
-        result = await Runner.run(
-            current_agent, req.message, context=state["context"], session=session
+        result = await traced_run(
+            current_agent,
+            req.message,
+            context=state["context"],
+            session=session,
+            thread_id=thread_id,
+            metadata={"agent_hint": req.agent_hint, "turn_kind": "primary"},
         )
     except InputGuardrailTripwireTriggered:
         _pop_quick_replies(state["context"])
@@ -130,30 +140,37 @@ async def chat(req: ChatRequest) -> ChatResponse:
             current_agent.name,
             None,
         )
-    except OutputGuardrailTripwireTriggered:
-        try:
-            retry_result = await Runner.run(
-                current_agent,
-                GENERIC_COMPLIANCE_REVISION_PROMPT,
-                context=state["context"],
-                session=session,
-            )
+    except OutputGuardrailTripwireTriggered as guardrail_exc:
+        check = guardrail_exc.guardrail_result.output.output_info
+        with observability_span(
+            "compliance_retry",
+            data={"violations": getattr(check, "violations", None)},
+        ):
+            try:
+                retry_result = await traced_run(
+                    current_agent,
+                    GENERIC_COMPLIANCE_REVISION_PROMPT,
+                    context=state["context"],
+                    session=session,
+                    thread_id=thread_id,
+                    metadata={"agent_hint": req.agent_hint, "turn_kind": "compliance_retry"},
+                )
+            except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered):
+                _pop_quick_replies(state["context"])
+                return await _finish(
+                    (
+                        "That draft didn't pass brand compliance and I wasn't able to "
+                        "auto-revise it. Could you rephrase the request without any "
+                        "claims about gold/diamond materials, guaranteed offers, or "
+                        "urgency language?"
+                    ),
+                    current_agent.name,
+                    None,
+                )
             return await _finish(
                 retry_result.final_output,
                 retry_result.last_agent.name,
                 _pop_quick_replies(state["context"]),
-            )
-        except (InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered):
-            _pop_quick_replies(state["context"])
-            return await _finish(
-                (
-                    "That draft didn't pass brand compliance and I wasn't able to "
-                    "auto-revise it. Could you rephrase the request without any "
-                    "claims about gold/diamond materials, guaranteed offers, or "
-                    "urgency language?"
-                ),
-                current_agent.name,
-                None,
             )
 
     return await _finish(

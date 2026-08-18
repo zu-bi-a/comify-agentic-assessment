@@ -5,3 +5,5 @@ pydantic>=2.7.0
 python-dotenv>=1.0.1
 asyncpg>=0.29.0
 greenlet>=3.0
+langfuse>=3.0.0
+openinference-instrumentation-openai-agents>=0.1.0

@@ -9,6 +9,7 @@ from agents import RunContextWrapper, function_tool
 
 from . import store
 from .context import GivaContext
+from .observability import observability_span
 
 BRAND_MD_PATH = Path(__file__).resolve().parent.parent / "brand" / "giva_brand.md"
 CATALOGUE_PATH = Path(__file__).resolve().parent.parent / "brand" / "catalogue.json"
@@ -91,6 +92,28 @@ def _catalogue_match_score(query: str, collection: dict) -> float:
 
 def _text_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def _keyword_match_score(query: str, text: str) -> float:
+    """Fraction of the query's meaningful words found in text -- suited to
+    topic search ("diwali offer") against a template's name/tags/body, unlike
+    _text_similarity which compares two whole drafts to each other."""
+    query_words = [w for w in re.findall(r"[a-z]+", query.lower()) if len(w) > 2]
+    if not query_words:
+        return 0.0
+    text_lower = text.lower()
+    return sum(1 for w in query_words if w in text_lower) / len(query_words)
+
+
+def _template_search_text(record: dict) -> str:
+    payload = record.get("payload") or {}
+    parts = [
+        record.get("name", ""),
+        " ".join(record.get("tags") or []),
+        str(payload.get("body", "")),
+        str(payload.get("title", "")),
+    ]
+    return " ".join(p for p in parts if p)
 
 
 def _auto_tags(
@@ -247,7 +270,10 @@ async def find_similar_templates(
         ctx.context.brand_name, channel.strip().lower(), category, tags
     )
     if not candidates:
-        return "No similar saved templates found."
+        with observability_span(
+            "duplicate_check", data={"candidate_count": 0, "matched": False}
+        ):
+            return "No similar saved templates found."
 
     scored = sorted(
         (
@@ -258,17 +284,28 @@ async def find_similar_templates(
         reverse=True,
     )
     best_score, best = scored[0]
-    if best_score < TEMPLATE_SIMILARITY_THRESHOLD:
-        return "No closely similar saved template found."
-    return (
-        f"A similar template already exists ({best_score:.2f} similarity): "
-        f"'{best['name']}' (id={best['id']}, saved {best['created_at']}). Do "
-        "NOT just present your draft as normal -- call offer_quick_replies "
-        "with options like [\"Create a variation\", \"View existing\", "
-        "\"Continue anyway\", \"Cancel\"] and ask the user how they'd like to "
-        "proceed, mentioning the existing template's name, before showing or "
-        "saving your draft."
-    )
+    matched = best_score >= TEMPLATE_SIMILARITY_THRESHOLD
+    with observability_span(
+        "duplicate_check",
+        data={
+            "candidate_count": len(candidates),
+            "best_score": round(best_score, 3),
+            "threshold": TEMPLATE_SIMILARITY_THRESHOLD,
+            "matched": matched,
+            "matched_template_id": best["id"] if matched else None,
+        },
+    ):
+        if not matched:
+            return "No closely similar saved template found."
+        return (
+            f"A similar template already exists ({best_score:.2f} similarity): "
+            f"'{best['name']}' (id={best['id']}, saved {best['created_at']}). Do "
+            "NOT just present your draft as normal -- call offer_quick_replies "
+            "with options like [\"Create a variation\", \"View existing\", "
+            "\"Continue anyway\", \"Cancel\"] and ask the user how they'd like to "
+            "proceed, mentioning the existing template's name, before showing or "
+            "saving your draft."
+        )
 
 
 @function_tool
@@ -424,7 +461,11 @@ async def load_template_for_editing(ctx: RunContextWrapper[GivaContext], templat
     fields = "\n".join(f"- {k}: {v}" for k, v in payload.items())
     return (
         f"Loaded '{record['name']}' ({record['channel']}) for editing:\n{fields}\n\n"
-        "Present this briefly to the user and ask how they'd like to modify it."
+        "If the user already described the change they want -- anywhere "
+        "earlier in this conversation, including the message that prompted "
+        "this edit -- apply it directly to the content above and present the "
+        "revised draft; do not ask them to repeat it. Only ask how they'd "
+        "like to modify it if they haven't said yet."
     )
 
 
@@ -540,3 +581,36 @@ async def list_saved_templates(channel: str | None = None) -> str:
         for t in templates
     ]
     return "\n".join(lines)
+
+
+@function_tool
+async def search_saved_templates(
+    ctx: RunContextWrapper[GivaContext], query: str, channel: str | None = None
+) -> str:
+    """Check whether a saved template already exists for a topic/occasion the
+    user describes in their own words (e.g. "diwali offer", "welcome
+    message"). Use this -- not list_saved_templates -- whenever the user asks
+    something like "do I have a template for X?".
+
+    Args:
+        query: The user's own wording for what they're looking for.
+        channel: Optional "whatsapp" or "push" to narrow the search.
+    """
+    records = await store.list_templates_by_brand(
+        ctx.context.brand_name, channel.strip().lower() if channel else None
+    )
+    if not records:
+        return "No saved templates yet."
+    scored = sorted(
+        ((_keyword_match_score(query, _template_search_text(r)), r) for r in records),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    matches = [(s, r) for s, r in scored if s > 0][:5]
+    if not matches:
+        return f"No saved templates found matching '{query}'."
+    lines = [
+        f"- [{r['channel']}] {r['name']} (id={r['id']}, created={r['created_at']})"
+        for _, r in matches
+    ]
+    return "Possible matches:\n" + "\n".join(lines)
